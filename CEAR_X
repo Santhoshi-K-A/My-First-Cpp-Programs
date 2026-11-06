@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>CEAR-X Digital Twin</title>
+<style>
+:root{--cy:#38e1ff;--em:#3ee6a8;--am:#ffb347;--tx:#cfe8f5;--mu:#6f8aa3}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:radial-gradient(ellipse at 50% 40%,#0d1d3a,#050b1a 72%);color:var(--tx);font:12px/1.4 system-ui,"Segoe UI",sans-serif;user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+.p{position:fixed;background:rgba(8,18,36,.6);border:1px solid rgba(56,225,255,.18);border-radius:10px;backdrop-filter:blur(8px);padding:8px 10px}
+#id{top:max(12px,env(safe-area-inset-top));left:12px;font-weight:700;letter-spacing:.2em;color:var(--cy);font-size:14px}
+#id small{display:block;font-weight:400;letter-spacing:.04em;color:var(--mu);font-size:10px}
+#ro{top:max(12px,env(safe-area-inset-top));right:12px;width:218px;font-variant-numeric:tabular-nums;font-size:11px}
+#ro .r{display:flex;align-items:center;gap:6px;margin:2px 0}#ro .r span:first-child{width:12px;color:var(--cy)}#ro .r span:last-child{width:42px;text-align:right}
+i{flex:1;height:5px;background:#12233f;border-radius:3px;position:relative;display:block}
+i::before{content:"";position:absolute;inset:0;width:var(--w);background:linear-gradient(90deg,var(--cy),var(--am));border-radius:3px}
+u{position:absolute;top:-3px;width:2px;height:11px;background:#fff;text-decoration:none}
+.g{display:grid;grid-template-columns:1fr 1fr;gap:0 8px;margin:5px 0;color:var(--mu)}.g b{color:var(--tx);font-weight:500}
+.a{display:flex;justify-content:space-between;color:var(--mu)}.a.ok{color:var(--em)}.a.ch{color:var(--cy);font-weight:700}
+hr{border:0;border-top:1px solid rgba(56,225,255,.15);margin:5px 0}
+#bar{bottom:max(10px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);display:flex;flex-wrap:wrap;gap:5px;justify-content:center;max-width:96vw}
+.b{cursor:pointer;padding:5px 9px;border-radius:7px;border:1px solid rgba(56,225,255,.25);background:rgba(10,24,48,.7);color:var(--tx);font:inherit}
+.b.on{background:rgba(56,225,255,.2);border-color:var(--cy)}.b.am.on{background:rgba(255,179,71,.2);border-color:var(--am)}
+.sep{width:1px;background:rgba(56,225,255,.2);margin:0 3px}
+.lb{position:fixed;left:0;top:0;font-size:10px;color:#9fd8ea;white-space:nowrap;pointer-events:none;text-shadow:0 0 4px #000;padding-left:8px;border-left:1px solid var(--cy)}
+#ft{position:fixed;left:12px;bottom:max(10px,env(safe-area-inset-bottom));font-size:9px;color:var(--mu);max-width:170px;pointer-events:none}
+#fb{display:none;position:fixed;inset:0;align-items:center;justify-content:center;text-align:center;padding:20px;color:var(--am);font-size:15px}
+@media(max-width:760px){#ft{display:none}#ro{width:170px}}
+#lp{top:max(12px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:3px;font-size:10px;white-space:nowrap;padding:6px 8px}
+#lp span{color:var(--mu);padding:2px 5px;border-radius:5px;transition:.15s}#lp span.on{color:#04121f;background:var(--cy);font-weight:700}#lp span.off{opacity:.3}#lp em{font-style:normal;color:var(--em);margin-left:3px}
+@media(max-width:1100px){#lp{top:62px;left:12px;transform:none;max-width:calc(100vw - 24px);overflow:hidden}}
+</style></head><body>
+<canvas id="c"></canvas>
+<div class="p" id="id">CEAR-X<small>Closed-loop Electrochemical Adaptive Regulation</small></div>
+<div class="p" id="ro"></div><div class="p" id="lp"></div>
+<div class="p" id="bar"></div>
+<div id="ft">Computational model, not experimentally validated. Components are conceptual; actuator effects are hypothetical modelling assumptions. Intervention cost 0.003 and the surrogate forecast are illustrative.</div>
+<div id="fb">WebGL is unavailable in this browser. Please open this file in a current version of Google Chrome with hardware acceleration enabled.</div>
+<script>
+(()=>{try{
+const cv=document.getElementById('c'),gl=cv.getContext('webgl',{antialias:true});
+if(!gl)throw 0;
+/* ---------- math ---------- */
+const nrm=v=>{const l=Math.hypot(...v)||1;return v.map(a=>a/l)},cr=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],dt3=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const mul=(a,b)=>{const o=new Float32Array(16);for(let i=0;i<4;i++)for(let j=0;j<4;j++){let s=0;for(let k=0;k<4;k++)s+=a[k*4+j]*b[i*4+k];o[i*4+j]=s}return o};
+const persp=(f,a,n,r)=>{const t=1/Math.tan(f/2);return new Float32Array([t/a,0,0,0,0,t,0,0,0,0,(r+n)/(n-r),-1,0,0,2*r*n/(n-r),0])};
+const look=e=>{const z=nrm(e),x=nrm(cr([0,1,0],z)),y=cr(z,x);return new Float32Array([x[0],y[0],z[0],0,x[1],y[1],z[1],0,x[2],y[2],z[2],0,-dt3(x,e),-dt3(y,e),-dt3(z,e),1])};
+const TM=(x,y,z,sx,sy,sz,r=0)=>{const c=Math.cos(r),s=Math.sin(r);return new Float32Array([c*sx,s*sx,0,0,-s*sy,c*sy,0,0,0,0,sz,0,x,y,z,1])};
+const cl=(v,a,b)=>Math.min(b,Math.max(a,v)),mix=(a,b,t)=>a+(b-a)*t;
+/* ---------- shaders ---------- */
+function prog(vs,fs){const p=gl.createProgram();for(const[t,s]of[[gl.VERTEX_SHADER,vs],[gl.FRAGMENT_SHADER,fs]]){const h=gl.createShader(t);gl.shaderSource(h,s);gl.compileShader(h);if(!gl.getShaderParameter(h,gl.COMPILE_STATUS))throw gl.getShaderInfoLog(h);gl.attachShader(p,h)}gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw gl.getProgramInfoLog(p);return p}
+const PM=prog(`attribute vec3 aP,aN;uniform mat4 uVP,uM;varying vec3 vW,vN,vL;
+void main(){vL=aP;vec4 w=uM*vec4(aP,1.);vW=w.xyz;vN=normalize((uM*vec4(aN,0.)).xyz);gl_Position=uVP*w;}`,
+`precision mediump float;varying vec3 vW,vN,vL;uniform vec3 uC,uCam;uniform float uA,uMet,uEm,uMode,uP;
+float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float nz(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}
+void main(){vec3 N=normalize(vN),V=normalize(uCam-vW);if(dot(N,V)<0.)N=-N;
+vec3 L1=normalize(vec3(.4,.9,.5));float d=max(dot(N,L1),0.)*.8+max(dot(N,normalize(vec3(-.6,.2,-.7))),0.)*.35+.18;
+vec3 R=reflect(-V,N);float sp=pow(max(dot(R,L1),0.),40.);
+vec3 env=mix(vec3(.03,.06,.12),vec3(.5,.75,.9),R.y*.5+.5);float fr=pow(1.-max(dot(N,V),0.),3.);
+vec3 c=uC*d*(1.-uMet*.6)+env*uMet*(.5+.5*fr)+sp*(.3+.7*uMet)+uC*uEm+vec3(.2,.6,.9)*fr*.25;
+float a=uA+fr*.3*step(uA,.9);
+if(uMode>.5&&uMode<1.5){a=uA*smoothstep(.5,0.,length(vL.xz));c=vec3(0.);}
+if(uMode>1.5){float n=nz(vL.yz*7.+3.)*.6+nz(vL.yz*17.)*.4;float m=smoothstep(n-.08,n+.02,uP);a=m*(.55+.4*n);c=mix(vec3(.95,.6,.15),vec3(.45,.25,.08),n)*d+vec3(.3,.15,0.)*uEm;}
+gl_FragColor=vec4(c,a);}`);
+const PP=prog(`attribute vec3 aP;attribute vec2 aI;uniform mat4 uVP;uniform float uS,uD,uH,uC;varying float vT;
+void main(){vT=aI.x;vec4 p=uVP*vec4(aP,1.);if(aI.y>uD)p=vec4(2.,2.,2.,1.);gl_Position=p;gl_PointSize=uS/p.w;}`,
+`precision mediump float;varying float vT;void main(){float d=length(gl_PointCoord-.5)*2.;if(d>1.)discard;float a=pow(1.-d,1.6);vec3 c=mix(vec3(.2,.85,1.),vec3(.25,.95,.6),vT);c=mix(c,vec3(1.,.3,.12),uH*.85);c=mix(c,vec3(.55,.3,.8)*.7,uC*.8);gl_FragColor=vec4(c*a*1.3,a*(.9-.4*uC));}`);
+/* ---------- geometry ---------- */
+function mk(p,i){const v=gl.createBuffer(),x=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,v);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(p),gl.STATIC_DRAW);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,x);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(i),gl.STATIC_DRAW);return{v,x,n:i.length}}
+const G={};
+(()=>{let p=[],i=[];for(let a=0;a<3;a++)for(const s of[-1,1]){const b=(a+1)%3,c=(a+2)%3,o=p.length/6;for(const[u,w]of[[-.5,-.5],[.5,-.5],[.5,.5],[-.5,.5]]){const q=[0,0,0],n=[0,0,0];q[a]=s*.5;q[b]=u;q[c]=w;n[a]=s;p.push(...q,...n)}i.push(o,o+1,o+2,o,o+2,o+3)}G.cube=mk(p,i);
+p=[];i=[];const N=28;for(let k=0;k<=N;k++){const a=k/N*6.2832,x=Math.cos(a),z=Math.sin(a);p.push(x/2,-.5,z/2,x,0,z,x/2,.5,z/2,x,0,z)}for(let k=0;k<N;k++){const o=k*2;i.push(o,o+1,o+3,o,o+3,o+2)}
+for(const s of[-1,1]){const c=p.length/6;p.push(0,s*.5,0,0,s,0);for(let k=0;k<=N;k++){const a=k/N*6.2832;p.push(Math.cos(a)/2,s*.5,Math.sin(a)/2,0,s,0)}for(let k=0;k<N;k++)i.push(c,c+1+k,c+2+k)}G.cyl=mk(p,i);
+p=[];i=[];const La=10,Lo=16;for(let a=0;a<=La;a++)for(let b=0;b<=Lo;b++){const t=a/La*Math.PI,f=b/Lo*6.2832,x=Math.sin(t)*Math.cos(f),y=Math.cos(t),z=Math.sin(t)*Math.sin(f);p.push(x/2,y/2,z/2,x,y,z)}for(let a=0;a<La;a++)for(let b=0;b<Lo;b++){const o=a*(Lo+1)+b;i.push(o,o+1,o+Lo+1,o+1,o+Lo+2,o+Lo+1)}G.sph=mk(p,i)})();
+/* ---------- CEAR-X plant, observer, decision layer (paper Sec. 3-8) ---------- */
+const H=[[.03,.10,.85],[1.85,.08,.12],[-.55,-.01,.02],[0,1,0],[0,0,1]],NS=[.006,.008,.008,.01,.01];
+const ACT=[['shear',0,-.019],['pulse',0,-.015],['reversal',0,-.018],['flow_adjust',1,-.205],['conductivity_comp',2,-.152]]; /* G entries from Fig. 3 */
+const COST=.003; /* illustrative initial condition (not in paper); weight 1.0 per Table 2 */
+const eta=x=>cl(.92-.24*x[0]-.10*x[1]-.07*x[2],.35,.98);
+const plant=x=>{const[a,h,c]=x,Rs=4*(1+.85*c+.1*h+.03*a),Rct=42*(1+1.85*a+.12*c+.08*h);return{Rs,Rct,Cdl:1.8*(1-.55*a+.02*c-.01*h),Rapp:Rs+Rct,eta:eta(x),Esp:1.8*(1+.55*a+.18*c+.12*h)}};
+const inv3=m=>{const[a,b,c,d,e,f,g,h,i]=m,D=a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g);return[e*i-f*h,c*h-b*i,b*f-c*e,f*g-d*i,a*i-c*g,c*d-a*f,d*h-e*g,b*g-a*h,a*e-b*d].map(v=>v/D)};
+const K=(()=>{const A=[];for(let i=0;i<3;i++)for(let j=0;j<3;j++){let s=i==j?.02:0;for(let r=0;r<5;r++)s+=H[r][i]*H[r][j];A.push(s)}const I=inv3(A);return[0,1,2].map(i=>H.map((_,r)=>[0,1,2].reduce((s,j)=>s+I[i*3+j]*H[r][j],0)))})();
+let sd=12345;const rnd=()=>{sd=(sd*1664525+1013904223)>>>0;return sd/4294967296};const gs=()=>Math.sqrt(-2*Math.log(rnd()+1e-12))*Math.cos(6.2832*rnd());
+const eff=(q,x)=>-Math.min(x[q[1]],Math.abs(q[2])*(q[1]==0?1.8:q[1]==1?.35:.6)); /* effective actuator effect (scaled model assumption) */
+const S={full:1,ctrl:1,pause:0,sc:1,flash:{}};let sim;
+function reset(){sd=12345;sim={pend:[0,0,0],peak:0,x:[.04,.03,.03],xh:[0,0,0],t:0,k:0,last:-99,onset:14,fault:S.sc-1,cand:[],pick:-1,hold:0};sim.out=plant(sim.x);S.flash={}}
+function authority(){const a=[0,0,0];ACT.forEach((q,i)=>{if(S.full||q[1]==0)a[q[1]]+=q[2]*q[2]});return a.map(Math.sqrt)}
+function fc(xh,ai){const x=xh.slice(),m=Math.max(...x),d=m>.1?x.indexOf(m):-1;if(ai>=0)x[ACT[ai][1]]=Math.max(0,x[ACT[ai][1]]+eff(ACT[ai],x));let s=0;for(let k=0;k<5;k++){if(d>=0)x[d]+=.01*(.62-x[d]);s+=eta(x)}return s/5}
+function step(){const s=sim;if(s.t>=71)return;s.t++;
+if(s.fault>=0&&s.t>=s.onset&&s.t<s.onset+14)s.x[s.fault]+=.09*(.62-s.x[s.fault]);
+for(let i=0;i<3;i++){const d=s.pend[i]*.4;s.x[i]=Math.max(0,s.x[i]+d);s.pend[i]-=d}
+s.x=s.x.map(v=>cl(v+gs()*.0015,0,.8));
+const y=H.map((r,i)=>r[0]*s.x[0]+r[1]*s.x[1]+r[2]*s.x[2]+gs()*NS[i]);
+s.xh=s.xh.map((v,i)=>.55*v+.45*cl(K[i].reduce((a,k,r)=>a+k*y[r],0),0,.8));
+const au=s.au=authority();s.cand=ACT.map((q,i)=>{const ok=au[q[1]]>=.03&&(S.full||q[1]==0);return{ok,dj:ok?fc(s.xh,i)-fc(s.xh,-1)-COST:NaN}});s.pick=-1;
+if(S.ctrl&&s.t-s.last>=3&&Math.max(...s.xh)>.15){let b=.001;s.cand.forEach((c,i)=>{if(c.ok&&c.dj>=b){b=c.dj;s.pick=i}});
+if(s.pick>=0){const q=ACT[s.pick];s.pend[q[1]]+=eff(q,s.x);s.k++;s.last=s.t;S.flash[q[0]]=1}}
+s.peak=Math.max(s.peak,s.fault>=0?s.x[s.fault]:0);s.out=plant(s.x);S.flash.meas=1;ui()}
+/* ---------- UI ---------- */
+const ro=document.getElementById('ro'),bar=document.getElementById('bar');
+const st=s=>{if(s.fault<0)return'nominal';const x=s.x[s.fault],e=s.xh[s.fault];if(s.t<s.onset)return'normal operation';if(s.peak<.12)return'fault developing';if(s.t>=71)return x<.1?'recovered (verified)':'ended, partial recovery';if(!S.ctrl)return'open loop: fault persists';if(x<.1&&s.peak>.2)return 'verifying recovery';return e>.12&&s.k==0?'diagnosing':'recovering '+Math.round((1-x/s.peak)*100)+'%'};
+function ui(){const s=sim,o=s.out,au=s.au||[0,0,0],r=(n,i)=>`<div class=r><span>${n}</span><i style="--w:${s.x[i]/.8*100}%"><u style="left:${s.xh[i]/.8*100}%"></u></i><span>${s.x[i].toFixed(3)}</span></div>`;
+ro.innerHTML=`<b>step ${s.t}/71</b> <span style="color:var(--mu)">${s.fault<0?'nominal':'fault: '+'αhc'[s.fault]+' @'+s.onset}</span>${r('α',0)}${r('h',1)}${r('c',2)}<div style="color:var(--mu);font-size:9px">bar: modelled state · tick: estimate x̂</div>
+<div class=g><span>Rs <b>${o.Rs.toFixed(2)}</b></span><span>Rct <b>${o.Rct.toFixed(2)}</b></span><span>Cdl <b>${o.Cdl.toFixed(3)}</b></span><span>Rapp <b>${o.Rapp.toFixed(2)}</b></span><span>η <b style="color:var(--em)">${o.eta.toFixed(4)}</b></span><span>Esp <b>${o.Esp.toFixed(3)}</b></span></div><hr>
+<div class=a><span>‖G‖ α·h·c</span><b>${au.map(v=>v.toFixed(3)).join(' · ')}</b></div>
+${ACT.map((q,i)=>{const c=s.cand[i]||{};return`<div class="a ${s.pick==i?'ch':c.ok&&c.dj>=.001?'ok':''}"><span>${q[0]}</span><span>${c.ok?'ΔJ '+(c.dj*1e3).toFixed(1)+'e-3':'no authority'}</span></div>`}).join('')}<hr>
+<div class=a><span>status</span><b>${st(s)}</b></div><div class=a><span>interventions</span><b>${s.k}</b></div><div class=a><span>cooldown</span><b>${Math.max(0,3-(s.t-s.last))}/3</b></div>`}
+const SH={chamber:1,electrodes:1,passivation:1,electrolyte:1,ions:1,sensors:1,piping:1,labels:1};
+const NM={chamber:'Chamber',electrodes:'Electrodes',passivation:'Passivation layer',electrolyte:'Electrolyte',ions:'Ions',sensors:'Sensors',piping:'Piping & actuators',labels:'Labels'};function btn(t,fn,on,cls=''){const b=document.createElement('button');b.className='b '+cls;b.textContent=t;b.onclick=()=>{fn(b);};if(on)b.classList.add('on');bar.appendChild(b);return b}
+const radio=(list,fn)=>{const bs=list.map((t,i)=>btn(t,()=>{bs.forEach(x=>x.classList.remove('on'));bs[i].classList.add('on');fn(i)},i==list.__d,list.__c))};
+const sep=()=>{const d=document.createElement('div');d.className='sep';bar.appendChild(d)};
+const pb=btn('Pause',b=>{S.pause^=1;b.textContent=S.pause?'Resume':'Pause';b.classList.toggle('on',!!S.pause)});btn('Reset view',()=>{cam.y=-.55;cam.p=.3;cam.d=dist0()});btn('Restart',reset);sep();
+let l=['Nominal','Passivation α','Hydraulic h','Conductivity c'];l.__d=1;l.__c='am';radio(l,i=>{S.sc=i;reset()});sep();
+l=['Full authority','Restricted'];l.__d=0;radio(l,i=>{S.full=1-i;ui()});sep();
+l=['CEAR-X on','Open loop'];l.__d=0;radio(l,i=>S.ctrl=1-i);sep();
+Object.keys(SH).forEach(k=>btn(NM[k]||k,b=>{SH[k]^=1;b.classList.toggle('on',!!SH[k]);lbs.forEach(e=>e.style.display=SH.labels?'':'none')},1));
+const lp=document.getElementById('lp'),LS=['Measure','Estimate','Diagnose','Authority','Predict','Decide','Act','Verify'];
+lp.innerHTML=LS.map(t=>'<span>'+t+'</span>').join('›')+'<em>↺ closed loop</em>';const lpe=[...lp.querySelectorAll('span')],lem=lp.querySelector('em');
+function lpu(){const f=S.pause||sim.t>=71?-1:Math.floor(acc/STEP*8);lpe.forEach((e,i)=>{e.classList.toggle('on',i==f);e.classList.toggle('off',!S.ctrl&&i>=3)});lem.textContent=S.ctrl?'↺ closed loop':'open loop';lem.style.color=S.ctrl?'':'var(--am)'}
+/* ---------- camera ---------- */
+const dist0=()=>{const a=cv.clientWidth/cv.clientHeight;return 8.2*Math.max(1,1.5/a)};
+const cam={y:-.55,p:.3,d:dist0()};const ptr=new Map();let pd=0;
+cv.onpointerdown=e=>{cv.setPointerCapture(e.pointerId);ptr.set(e.pointerId,[e.clientX,e.clientY]);pd=0};
+cv.onpointerup=cv.onpointercancel=e=>ptr.delete(e.pointerId);
+cv.onpointermove=e=>{const o=ptr.get(e.pointerId);if(!o)return;const n=[e.clientX,e.clientY];
+if(ptr.size==1){cam.y-=(n[0]-o[0])*.008;cam.p=cl(cam.p+(n[1]-o[1])*.008,-1.45,1.45)}
+else{const q=[...ptr.entries()].find(a=>a[0]!=e.pointerId)[1],d1=Math.hypot(o[0]-q[0],o[1]-q[1]),d2=Math.hypot(n[0]-q[0],n[1]-q[1]);cam.d=cl(cam.d*d1/d2,3,16)}ptr.set(e.pointerId,n)};
+cv.onwheel=e=>{e.preventDefault();cam.d=cl(cam.d*Math.exp(e.deltaY*.001),3,16)};
+/* ---------- labels ---------- */
+const LB=[['Electrode stack',[0,.62,.85]],['Impedance probe · Rs Rct Cdl',[.25,.05,0]],['Inlet · flow sensor',[-3.3,-.8,0]],['Outlet',[3.35,.75,0]],['Conductivity sensor',[1.85,.2,.7]],['flow_adjust',[-2.9,-.45,.3]],['conductivity_comp',[-1.9,1.7,-.6]]];
+const lbs=LB.map(a=>{const e=document.createElement('div');e.className='lb';e.textContent=a[0];document.body.appendChild(e);return e});
+/* ---------- particles ---------- */
+const NP=3200,P=new Float32Array(NP*5),pbuf=gl.createBuffer();
+for(let i=0;i<NP;i++){P.set([(Math.random()-.5)*3.6,-.95+Math.random()*1.9,(Math.random()-.5)*1.7,i&1,Math.random()],i*5)}
+function stepP(dt,vs){const Rn=49.5/vs.out.Rapp,E=.9*Rn*(1-.5*cl(vs.vx[2]/.35,0,1)),hk=cl(vs.vh/.35,0,1),ck=cl(vs.vx[2]/.35,0,1),fv=.55*(1-.85*hk)*(.4+.6*Rn),turb=.15+hk*1.6;
+for(let i=0;i<NP;i++){const o=i*5;let x=P[o],y=P[o+1],z=P[o+2];const t=P[o+3],g=Math.floor((x+1.75)/.5),inG=g>=0&&g<6;
+let vx;if(inG)vx=(t?-1:1)*(g%2?-1:1)*E+(Math.random()-.5)*turb;else vx=-Math.sign(x)*.35+(Math.random()-.5)*.3;
+let nx=x+vx*dt;const ng=Math.floor((nx+1.75)/.5);if(inG&&ng!==g)nx=x-vx*dt*.3;
+y+=fv*dt+(Math.random()-.5)*turb*dt*.8;z=cl(z+(Math.random()-.5)*turb*dt*1.2,-.85,.85);
+if(y>.95){y=-.95;nx=-1.7+Math.random()*3.4}if(y<-.95)y=-.95;P[o]=cl(nx,-1.95,1.95);P[o+1]=y;P[o+2]=z}}
+/* ---------- render ---------- */
+let vs={vx:[.04,.03,.03],vh:.03,out:null},U={},aT=0;
+for(const p of[PM,PP]){const n=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);for(let i=0;i<n;i++){const nm=gl.getActiveUniform(p,i).name;U[p===PM?'m_'+nm:'p_'+nm]=gl.getUniformLocation(p,nm)}}
+let VP,CAM;
+function draw(g,M,c,a=1,met=0,em=0,mode=0,pp=0){gl.uniformMatrix4fv(U.m_uM,false,M);gl.uniform3fv(U.m_uC,c);gl.uniform1f(U.m_uA,a);gl.uniform1f(U.m_uMet,met);gl.uniform1f(U.m_uEm,em);gl.uniform1f(U.m_uMode,mode);gl.uniform1f(U.m_uP,pp);
+gl.bindBuffer(gl.ARRAY_BUFFER,g.v);const aP=gl.getAttribLocation(PM,'aP'),aN=gl.getAttribLocation(PM,'aN');gl.enableVertexAttribArray(aP);gl.enableVertexAttribArray(aN);gl.vertexAttribPointer(aP,3,gl.FLOAT,false,24,0);gl.vertexAttribPointer(aN,3,gl.FLOAT,false,24,12);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,g.x);gl.drawElements(gl.TRIANGLES,g.n,gl.UNSIGNED_SHORT,0)}
+const SIL=[.72,.76,.8],GRA=[.2,.22,.27],CY=[.2,.85,1],EM=[.25,.95,.6],AM=[1,.7,.28];
+const fl=k=>S.flash[k]||0,mix3=(a,b,t)=>a.map((q,i)=>mix(q,b[i],t));
+function scene(){
+const o=sim.out,v=vs;gl.useProgram(PM);gl.uniformMatrix4fv(U.m_uVP,false,VP);gl.uniform3fv(U.m_uCam,CAM);
+gl.disable(gl.CULL_FACE);gl.enable(gl.DEPTH_TEST);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(true);
+draw(G.cube,TM(0,-1.66,0,9,.01,6),[0,0,0],.6,0,0,1);
+/* structure */
+draw(G.cube,TM(0,-1.45,0,5,.26,2.9),GRA,1,.8);draw(G.cube,TM(0,-1.29,0,4.5,.06,2.4),SIL,1,.9);
+if(SH.chamber)for(const sx of[-1,1])for(const sz of[-1,1]){draw(G.cube,TM(s
+/* electrodes */
+if(SH.electrodes){const sh=fl('shear'),pu=fl('pulse'),rv=fl('reversal');
+for(let i=0;i<7;i++){const x=-1.5+i*.5,an=i%2==0,sw=rv>0?(an?mix(0,1,rv):mix(1,0,rv)):(an?0:1),col=[mix(SIL[0],GRA[0],sw),mix(SIL[1],GRA[1],sw),mix(SIL[2],GRA[2],sw)];
+const jit=sh*Math.sin(aT*60+i)*.01;draw(G.cube,TM(x+jit,-.2,0,.05,1.5,1.5),col,1,.85,Math.max(pu*.5,sh*.25));
+draw(G.cyl,TM(x,.98,an?-.45:.45,.07,.85,.07),SIL,1,.9)}
+draw(G.cube,TM(0,1.42,-.45,3.3,.08,.12),SIL,1,.9);draw(G.cube,TM(0,1.42,.45,3.3,.08,.12),SIL,1,.9);
+draw(G.cyl,TM(-1.8,1.42,-.45,.2,.2,.2,1.5708),SIL,1,.9,.0);draw(G.cyl,TM(1.8,1.42,.45,.2,.2,.2,1.5708),GRA,1,.8);
+draw(G.cyl,TM(-1.8,1.42,-.45,.14,.5,.14,1.5708),CY,1,.4,.25);draw(G.cyl,TM(1.8,1.42,.45,.14,.5,.14,1.5708),EM,1,.4,.25)}
+/* piping + actuators */
+if(SH.piping){draw(G.cyl,TM(-2.75,-.8,0,.36,1.3,.36,1.5708),SIL,1,.9);draw(G.cyl,TM(-2.15,-.8,0,.5,.12,.5,1.5708),GRA,1,.8);
+draw(G.cyl,TM(2.75,.75,0,.36,1.3,.36,1.5708),SIL,1,.9);draw(G.cyl,TM(2.15,.75,0,.5,.12,.5,1.5708),GRA,1,.8);
+draw(G.cube,TM(-2.9,-.8,0,.5,.55,.55),GRA,1,.8,fl('flow_adjust')*.9+cl(v.vh/.35,0,1)*(.5+.4*Math.sin(aT*6)));draw(G.cyl,TM(-2.9,-.45,0,.14,.4,.14),SIL,1,.9,fl('flow_adjust')*.7);
+draw(G.cyl,TM(-1.9,1.45,-.6,.2,.6,.2),GRA,1,.8);draw(G.sph,TM(-1.9,1.78,-.6,.2,.2,.2),mix3(EM,[.7,.3,.9],cl(v.vx[2]/.35,0,1)),1,.2,.4+fl('conductivity_comp')*1.5+cl(v.vx[2]/.35,0,1)*.6*(.5+.5*Math.sin(aT*6)))}
+/* sensors (conceptual locations) */
+if(SH.sensors){const pu=.5+.5*Math.sin(aT*3)+fl('meas')*.5;for(const p of[[.25,.05,0],[-3.3,-.8,0],[1.85,.2,.7]])draw(G.sph,TM(p[0],p[1],p[2],.13,.13,.13),CY,1,.2,pu*1.2);
+draw(G.cyl,TM(1.85,.85,.7,.05,1.4,.05),SIL,1,.9);draw(G.cyl,TM(-3.3,-.55,0,.05,.5,.05),SIL,1,.9)}
+/* ions */
+if(SH.ions){gl.useProgram(PP);gl.uniformMatrix4fv(U.p_uVP,false,VP);gl.uniform1f(U.p_uS,cv.height*.02*(7/cam.d*.9+.3)*1.6);gl.uniform1f(U.p_uD,cl(1-cl(v.vx[2]/.35,0,1)*.85,.1,1));gl.uniform1f(U.p_uH,cl(v.vh/.35,0,1));gl.uniform1f(U.p_uC,cl(v.vx[2]/.35,0,1));
+gl.blendFunc(gl.SRC_ALPHA,gl.ONE);gl.depthMask(false);gl.bindBuffer(gl.ARRAY_BUFFER,pbuf);gl.bufferData(gl.ARRAY_BUFFER,P,gl.DYNAMIC_DRAW);
+const a=gl.getAttribLocation(PP,'aP'),b=gl.getAttribLocation(PP,'aI');gl.enableVertexAttribArray(a);gl.enableVertexAttribArray(b);gl.vertexAttribPointer(a,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(b,2,gl.FLOAT,false,20,12);gl.drawArrays(gl.POINTS,0,NP);
+gl.disableVertexAttribArray(a);gl.disableVertexAttribArray(b);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA)}
+/* transparent pass */
+gl.useProgram(PM);gl.depthMask(false);
+if(SH.passivation)for(let i=0;i<7;i++)draw(G.cube,TM(-1.5+i*.5,-.2,0,.062,1.51,1.51),AM,1,0,.4+fl('shear')*.4,2,Math.min(1.05,v.vx[0]/.55)*.95);
+if(SH.electrolyte){const hk=cl(v.vh/.35,0,1),ck=cl(v.vx[2]/.35,0,1),b=[.05,.4,.65],r=[.7,.22,.1],u=[.3,.12,.4];const col=[0,1,2].map(i=>mix(mix(b[i],r[i],hk*.8),u[i],ck*.85));draw(G.cube,TM(0,-.1,0,4.1,2.2,1.9),col,.16+.3*Math.max(hk,ck),0,.12)}
+if(SH.chamber)draw(G.cube,TM(0,0,0,4.2,2.4,2),[.55,.8,.95],.07,.3,0)}
+function resize(){const d=Math.min(2,devicePixelRatio||1),w=cv.clientWidth*d|0,h=cv.clientHeight*d|0;if(cv.width!=w||cv.height!=h){cv.width=w;cv.height=h}gl.viewport(0,0,w,h)}
+let tl=performance.now(),acc=0;const STEP=380;
+function frame(ts){const rd=Math.min(.25,(ts-tl)/1000),dt=Math.min(.05,rd);tl=ts;resize();
+if(!S.pause){aT+=dt;acc+=rd*1e3;while(acc>=STEP){acc-=STEP;step()}for(const k in S.flash)S.flash[k]=Math.max(0,S.flash[k]-dt*1.6);
+vs.out=sim.out;for(let i=0;i<3;i++)vs.vx[i]+=(sim.x[i]-vs.vx[i])*Math.min(1,dt*6);vs.vh=vs.vx[1];stepP(dt,vs)}
+gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+const a=cv.width/cv.height;CAM=[cam.d*Math.cos(cam.p)*Math.sin(cam.y),cam.d*Math.sin(cam.p),cam.d*Math.cos(cam.p)*Math.cos(cam.y)];
+VP=mul(persp(.66,a,.1,60),look(CAM));scene();lpu();
+if(SH.labels)LB.forEach((q,i)=>{const p=q[1],c=[0,1,2,3].map(r=>VP[r]*p[0]+VP[4+r]*p[1]+VP[8+r]*p[2]+VP[12+r]);const e=lbs[i];if(c[3]<=0){e.style.opacity=0;return}e.style.opacity=.9;e.style.transform=`translate(${(c[0]/c[3]*.5+.5)*cv.clientWidth}px,${(1-(c[1]/c[3]*.5+.5))*cv.clientHeight}px)`});
+requestAnimationFrame(frame)}
+reset();vs.out=sim.out;ui();requestAnimationFrame(frame);
+}catch(e){console.error(e);document.getElementById('fb').style.display='flex'}})();
+</script></body></html>
